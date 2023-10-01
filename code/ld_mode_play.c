@@ -382,10 +382,13 @@ function void LD_ModePlayInit(LD_Context *ld) {
         xi_logger_create(play->arena, &play->logger, xi->system.out, XI_KB(128));
 
         play->hero = xi_animation_get_by_name(&xi->assets, "hero");
+        play->heroFlame = xi_animation_get_by_name(&xi->assets, "hero_flame");
 
         play->grid = xi_arena_push_array(play->arena, v4, 32);
 
         f32 aspect = (xi->window.width / (f32) xi->window.height);
+
+        play->puzzle_timer = 60.0f;
 
         play->map_hovered = true;
 
@@ -546,6 +549,8 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
     if (kb->keys['c'].pressed) { LD_SolutionClear(play);    }
     if (kb->keys['i'].pressed) { play->bagOpen = true;      }
     if (kb->keys['m'].pressed) { play->map_open = !play->map_open; }
+
+    play->puzzle_timer -= dt;
 
     if (play->map_open && kb->keys['q'].pressed) {
         if (play->recording) {
@@ -717,6 +722,7 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
 
 
     xi_animation_update(&play->hero, dt);
+    xi_animation_update(&play->heroFlame, dt);
 
 
 #if 0
@@ -929,10 +935,15 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
         xi_sprite_draw_xy_scaled(renderer, img, p, scale, 0);
     }
 
-    {
-        xiImageHandle hero = xi_animation_current_frame_get(&play->hero);
-        xi_sprite_draw_xy_scaled(renderer, hero, xi_v2_add(bounds.min.xy, xi_v2_create(0.8f, 0.4f)), 0.4f, 0);
+    f32 guy_pos = 10.5f;
+    if(play->puzzle_timer > 0){
+        guy_pos = (60 - play->puzzle_timer)*guy_pos/60;
     }
+    xiImageHandle hero = xi_animation_current_frame_get(&play->hero);
+    xi_sprite_draw_xy_scaled(renderer, hero, xi_v2_add(bounds.min.xy, xi_v2_create((guy_pos + 0.8f), 0.4f)), 0.4f, 0);
+
+    xiImageHandle heroFlame = xi_animation_current_frame_get(&play->heroFlame);
+    xi_sprite_draw_xy_scaled(renderer, heroFlame, xi_v2_add(bounds.min.xy, xi_v2_create(guy_pos + 0.55f, 0.3f)), 0.2f, 0);
 
     {
         xiImageHandle map = xi_image_get_by_name(&xi->assets, "map");

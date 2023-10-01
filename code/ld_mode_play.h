@@ -199,6 +199,7 @@ struct LD_ModePlay {
     xiLogger logger;
 
     xiAnimation hero;
+    xiAnimation heroFlame;
 
     u32 occupancy;
 
@@ -224,6 +225,8 @@ struct LD_ModePlay {
 
     b32 map_hovered;
     f32 map_timer;
+
+    f32 puzzle_timer;
 
     b32 recording;
     LD_MapRoute  route;
