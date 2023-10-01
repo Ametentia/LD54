@@ -42,6 +42,8 @@ typedef xi_rect3 rect3;
 typedef xi_m2x2 m2x2;
 typedef xi_m4x4 m4x4;
 
+typedef xi_string string;
+
 typedef struct LD_ModePlay LD_ModePlay;
 
 typedef u32 LD_GameMode;

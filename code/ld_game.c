@@ -30,7 +30,7 @@ extern XI_EXPORT XI_GAME_INIT(xiContext *xi, xi_u32 type) {
             assets->importer.search_dir    = xi_str_format(temp, "%.*s/../assets", xi_str_unpack(exe_path));
             assets->importer.sprite_prefix = xi_str_wrap_const("s_");
 
-            assets->animation_dt = 1.0f / 7.0f;
+            assets->animation_dt = 1.0f / 30.0f;
 
             assets->sample_buffer.limit = XI_MB(128);
 
@@ -54,15 +54,13 @@ extern XI_EXPORT XI_GAME_INIT(xiContext *xi, xi_u32 type) {
 
             audio->music.playing     = true;
             audio->music.volume      = 0.8f;
-            audio->music.layer_limit = 16;
+            audio->music.layer_limit = 32;
 
             audio->sfx.volume = 0.8f;
             audio->sfx.limit  = 32;
         }
         break;
         case XI_GAME_INIT: {
-            // @todo: init game
-            //
             xiArena arena = { 0 };
             xi_arena_init_virtual(&arena, XI_GB(8));
 
@@ -87,6 +85,16 @@ extern XI_EXPORT XI_GAME_INIT(xiContext *xi, xi_u32 type) {
 
 extern XI_EXPORT XI_GAME_SIMULATE(xiContext *xi) {
     LD_Context *ld = (LD_Context *) xi->user;
+
+    xiInputKeyboard *kb = &xi->keyboard;
+    if (kb->alt && kb->keys['f'].pressed) {
+        if (xi->window.state == XI_WINDOW_STATE_FULLSCREEN) {
+            xi->window.state = XI_WINDOW_STATE_WINDOWED;
+        }
+        else {
+            xi->window.state = XI_WINDOW_STATE_FULLSCREEN;
+        }
+    }
 
     switch (ld->mode) {
         case LD_GAME_MODE_PLAY: {
