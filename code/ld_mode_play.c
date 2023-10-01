@@ -130,6 +130,8 @@ struct LD_ItemInfo {
 
     LD_ShapeType    base_shape; // unrotated
     LD_ItemCategory categories;
+
+    v2 position;
 };
 
 typedef struct LD_PlacedItem LD_PlacedItem;
@@ -148,13 +150,13 @@ struct LD_PlacedItem {
 };
 
 global LD_ItemInfo items[] = {
-    { "rod",     LD_SHAPE_TYPE_Z,  0 },
-    { "net",     LD_SHAPE_TYPE_Z,  0 },
-    { "bombs",   LD_SHAPE_TYPE_TU, 0 },
-    { "torch",   LD_SHAPE_TYPE_I,  0 },
-    { "lantern", LD_SHAPE_TYPE_O,  0 },
-    { "lilypad", LD_SHAPE_TYPE_L,  0 },
-    { "ladder",  LD_SHAPE_TYPE_S,  0 }
+    { "rod",     LD_SHAPE_TYPE_Z,  0},
+    { "net",     LD_SHAPE_TYPE_Z,  0},
+    { "bombs",   LD_SHAPE_TYPE_TU, 0},
+    { "torch",   LD_SHAPE_TYPE_I,  0},
+    { "lantern", LD_SHAPE_TYPE_O,  0},
+    { "lilypad", LD_SHAPE_TYPE_L,  0},
+    { "ladder",  LD_SHAPE_TYPE_S,  0}
 };
 
 struct LD_ModePlay {
@@ -182,10 +184,8 @@ struct LD_ModePlay {
     u32 cindex;
     v4 *grid;
 
-    bool bagOpen;
     bool itemSelected;
-    LD_ShapePositions invShapes[7];
-    LD_ShapePositions selected_shape;
+    LD_ItemInfo *selected_item;
 };
 
 function LD_PlacedItem *LD_PlacedItemGet(LD_ModePlay *play) {
@@ -405,34 +405,12 @@ function u32 LD_ShapeToOccupancy(u32 x, u32 y, LD_ShapeType type) {
     return result;
 }
 
-function void LD_DrawItems(xiRenderer *renderer, LD_ShapePositions *invShapes){
-    v2 bagCenter = xi_v2_create(-4.5f,1.5f);
-    LD_ShapeType bagShapes[7] = {0,2,4,6,8,12,13};
-    f32 quadDim = 0.3f;
-    f32 currentRowLength = 0;
-    f32 rows = 0;
+function void LD_DrawItems(xiRenderer *renderer, xiAssetManager assets){
+    
+    f32 quadDim = 1.0f;
     for(u32 i = 0; i < 7; i++){
-        LD_ShapeInfo quads = shapes[bagShapes[i]];
-        invShapes[i].quad_number = quads.offset_count + 1;
-        if(currentRowLength > 3){
-            currentRowLength = 0;
-            rows -= quadDim*3;
-        }
-        v2 shapeCenter = xi_v2_add(bagCenter, xi_v2_create(currentRowLength,rows));
-        xi_quad_draw_xy(renderer, xi_v4_create(1, 0, 1, 1), shapeCenter, xi_v2_create(quadDim, quadDim), 0);
-        invShapes[i].positions[0] = shapeCenter;
-        currentRowLength+=quadDim;
-        for(u32 j = 0; j < quads.offset_count; j++){
-            f32 xp = shapeCenter.x;
-            f32 yp = shapeCenter.y;
-            xp += quadDim * quads.offsets[j].x;
-            yp += quadDim * quads.offsets[j].y;
-            v2 pos = xi_v2_create(xp,yp);
-            invShapes[i].positions[j+1] = pos;
-            xi_quad_draw_xy(renderer, xi_v4_create(1, 0, 1, 1), pos, xi_v2_create(quadDim, quadDim), 0);
-            currentRowLength += quadDim * quads.offsets[j].x;
-        }
-        currentRowLength += quadDim + 0.15f;
+        xiImageHandle handle = xi_image_get_by_name(&assets, items[i].name);
+        xi_sprite_draw_xy(renderer, handle, items[i].position, xi_v2_create(quadDim, quadDim), 0);
     }
 }
 
@@ -441,16 +419,15 @@ function void LD_Pickup(v2 cursorPos, LD_ModePlay *play){
         return;
     }
     for(u32 i = 0; i < 7; i++){
-        LD_ShapePositions shape = play->invShapes[i];
-        for(u32 j = 0; j < shape.quad_number; j++){
-            xi_rect2 bounds;
-            bounds.min = xi_v2_create(shape.positions[j].x-0.15f,shape.positions[j].y-0.15f );
-            bounds.max = xi_v2_create(shape.positions[j].x+0.15f,shape.positions[j].y+0.15f );
-            if(cursorPos.x > bounds.min.x && cursorPos.x <= bounds.max.x && cursorPos.y > bounds.min.y && cursorPos.y <= bounds.max.y){
-                play->selected_shape = shape;
-                play->itemSelected = true;
-                return;
-            }
+        LD_ItemInfo item = items[i];
+        xi_rect2 bounds;
+        bounds.min = xi_v2_create(item.position.x-0.65f,item.position.y-0.65f );
+        bounds.max = xi_v2_create(item.position.x+0.65f,item.position.y+0.65f );
+        if(cursorPos.x > bounds.min.x && cursorPos.x <= bounds.max.x && cursorPos.y > bounds.min.y && cursorPos.y <= bounds.max.y){
+            play->selected_item = &item;
+            play->itemSelected = true;
+            xi_log(&play->logger, NULL, "picked up: %d",i);
+            return;
         }
     }
 }
@@ -482,6 +459,19 @@ function void LD_ModePlayInit(LD_Context *ld) {
 
         LD_SolutionClear(play);
 
+        f32 currentRowLength = -4;
+        f32 rows = 2;
+        for(u32 i = 0; i < 7; i++){
+            if(currentRowLength > -1){
+                currentRowLength = -4;
+                rows -= 1;
+            }   
+            v2 shapeCenter = xi_v2_create(currentRowLength,rows);
+            items[i].position = shapeCenter;
+            currentRowLength += 1;
+
+        }
+
         ld->mode = LD_GAME_MODE_PLAY;
         ld->play = play;
     }
@@ -501,8 +491,6 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
     if (kb->keys['g'].pressed) { LD_SolutionGenerate(play); }
     if (kb->keys['s'].pressed) { LD_SolutionStep(play);     }
     if (kb->keys['c'].pressed) { LD_SolutionClear(play);    }
-    if (kb->keys['i'].pressed) { play->bagOpen = true;      }
-
     if (kb->keys['='].pressed) {
         play->cindex += 1;
         if (play->cindex >= XI_ARRAY_SIZE(debug_colours)) { play->cindex = 0; }
@@ -516,7 +504,7 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
     v2 mouse = xi->mouse.position.clip;
     v3 world = xi_unproject_xy(&play->camera, mouse);
 
-    if (xi->mouse.left.down && play->bagOpen) { LD_Pickup(world.xy, play); }
+    if (xi->mouse.left.down) { LD_Pickup(world.xy, play); }
     if (xi->mouse.left.released){ play->itemSelected = false; }
 
 
@@ -645,19 +633,15 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
 
     v2 mouse = xi->mouse.position.clip;
     v3 world = xi_unproject_xy(&renderer->camera, mouse);
-
-    if(play->bagOpen){
-        LD_DrawItems(renderer, play->invShapes);
-    }
-
+    
     if(play->itemSelected){
-        u32 quads = play->selected_shape.quad_number;
-        for(u32 i = 0; i < quads; i++){
-            v2 netPos = xi_v2_create(play->selected_shape.positions[i].x - play->selected_shape.positions[0].x, play->selected_shape.positions[i].y - play->selected_shape.positions[0].y);
-            v2 pos = xi_v2_create(world.x + netPos.x, world.y + netPos.y);
-            xi_quad_draw_xy(renderer, xi_v4_create(1,0,0,1), pos, xi_v2_create(0.3f,0.3f), 0);
-        }
+        LD_ItemInfo *item = play->selected_item;
+        item->position = world.xy;        
     }
+
+    LD_DrawItems(renderer, xi->assets);
+    
+
 
     f32 dim = 0.5f;
 
