@@ -12,6 +12,8 @@
 #define GRID_BASE_X    1.65f
 #define GRID_BASE_Y   -0.8f
 
+#define MAX_MUSIC_LAYERS 15
+
 global v4 debug_colours[] =
 {
     /* 00 */ { 1, 0, 0, 1},
@@ -120,25 +122,25 @@ global LD_ShapeInfo shapes[LD_SHAPE_TYPE_COUNT] = {
     3, { {  0, -1 }, {  1,  0 }, {  1,  1 } }, // ZR
 };
 
-typedef u32 LD_ItemCategory;
-enum LD_ItemCategory {
-    LD_ITEM_CATEGORY_DESTRUCTIVE = (1 << 0),
-    LD_ITEM_CATEGORY_TRAVERSAL   = (1 << 1),
-    LD_ITEM_CATEGORY_COMBATIVE   = (1 << 2),
-    LD_ITEM_CATEGORY_DEFENSIVE   = (1 << 3),
-    LD_ITEM_CATEGORY_COOLING     = (1 << 4),
-    LD_ITEM_CATEGORY_HEATING     = (1 << 5),
-    LD_ITEM_CATEGORY_ENCOUNTER   = (1 << 6),
-    LD_ITEM_CATEGORY_HEALING     = (1 << 7),
-    LD_ITEM_CATEGORY_FOOD        = (1 << 8),
+typedef u32 LD_ItemType;
+enum LD_ItemType {
+    LD_ITEM_TYPE_ROD = 0,
+    LD_ITEM_TYPE_NET,
+    LD_ITEM_TYPE_BOMBS,
+    LD_ITEM_TYPE_TORCH,
+    LD_ITEM_TYPE_LANTERN,
+    LD_ITEM_TYPE_LILYPAD,
+    LD_ITEM_TYPE_LADDER,
+
+    LD_ITEM_TYPE_COUNT
 };
 
 typedef struct LD_ItemInfo LD_ItemInfo;
 struct LD_ItemInfo {
     const char *name;
 
-    LD_ShapeType    base_shape; // unrotated
-    LD_ItemCategory categories;
+    LD_ShapeType base_shape; // unrotated
+    LD_ItemType  type;
 };
 
 typedef struct LD_PlacedItem LD_PlacedItem;
@@ -161,14 +163,46 @@ struct LD_PlacedItem {
     LD_PlacedItem *prev_bag; // prev in bag
 };
 
+typedef u32 LD_MapBlockadeType;
+enum LD_MapBlockadeType {
+    LD_MAP_BLOCKADE_TYPE_NONE = 0,
+    LD_MAP_BLOCKADE_TYPE_BUGS,
+    LD_MAP_BLOCKADE_TYPE_ROCKS,
+    LD_MAP_BLOCKADE_TYPE_UNK0, // torch counter :noblock
+    LD_MAP_BLOCKADE_TYPE_UNK1, // lantern counter :noblock
+    LD_MAP_BLOCKADE_TYPE_UNK2, // lilypad counter (stream?) :noblock
+    LD_MAP_BLOCKADE_TYPE_WALL,
+    LD_MAP_BLOCKADE_TYPE_POND
+};
+
+typedef struct LD_MapBlockade LD_MapBlockade;
+struct LD_MapBlockade {
+    const char *name;
+    LD_MapBlockadeType type;
+};
+
+//
+// @todo: instead of global, pre-initialise these with their image handles
+//
+
+global LD_MapBlockade blockades[LD_ITEM_TYPE_COUNT] = {
+    { "pond",  LD_MAP_BLOCKADE_TYPE_POND  },
+    { "bugs",  LD_MAP_BLOCKADE_TYPE_BUGS  },
+    { "rocks", LD_MAP_BLOCKADE_TYPE_ROCKS },
+    { "unk0",  LD_MAP_BLOCKADE_TYPE_NONE  },
+    { "unk1",  LD_MAP_BLOCKADE_TYPE_NONE  },
+    { "unk2",  LD_MAP_BLOCKADE_TYPE_NONE  },
+    { "wall",  LD_MAP_BLOCKADE_TYPE_WALL  },
+};
+
 global LD_ItemInfo items[] = {
-    { "rod",     LD_SHAPE_TYPE_Z,  0 },
-    { "net",     LD_SHAPE_TYPE_Z,  0 },
-    { "bombs",   LD_SHAPE_TYPE_TU, 0 },
-    { "torch",   LD_SHAPE_TYPE_I,  0 },
-    { "lantern", LD_SHAPE_TYPE_O,  0 },
-    { "lilypad", LD_SHAPE_TYPE_L,  0 },
-    { "ladder",  LD_SHAPE_TYPE_S,  0 }
+    { "rod",     LD_SHAPE_TYPE_Z,  LD_ITEM_TYPE_ROD      },
+    { "net",     LD_SHAPE_TYPE_Z,  LD_ITEM_TYPE_NET      },
+    { "bombs",   LD_SHAPE_TYPE_TU, LD_ITEM_TYPE_BOMBS    },
+    { "torch",   LD_SHAPE_TYPE_I,  LD_ITEM_TYPE_TORCH    },
+    { "lantern", LD_SHAPE_TYPE_O,  LD_ITEM_TYPE_LANTERN  },
+    { "lilypad", LD_SHAPE_TYPE_L,  LD_ITEM_TYPE_LILYPAD  },
+    { "ladder",  LD_SHAPE_TYPE_S,  LD_ITEM_TYPE_LADDER   }
 };
 
 typedef u32 LD_MapDestination;
@@ -204,12 +238,18 @@ struct LD_ModePlay {
 
     xiRandomState rng;
 
-    LD_PlacedItem *bag_items;
-    LD_PlacedItem *placed_items;
+    struct {
+        u32 total;
+        u32 solution;
 
-    LD_PlacedItem *picked;
+        LD_PlacedItem *first; // head of list
+        LD_PlacedItem *last;  // tail of list, mainly to append to
 
-    LD_PlacedItem *free_items;
+        LD_PlacedItem *free;
+
+        LD_PlacedItem *bag;
+        LD_PlacedItem *picked;
+    } items;
 
     u32 step_occupancy;
     u32 cindex;
@@ -220,17 +260,24 @@ struct LD_ModePlay {
     LD_ShapePositions invShapes[7];
     LD_ShapePositions selected_shape;
 
-    b32 map_open;
+    struct {
+        b32 open;
+        b32 hovered;
+        f32 timer;
 
-    b32 map_hovered;
-    f32 map_timer;
+        u32 last_route;
+        LD_MapRoute    *route;
+        LD_MapBlockade *blockades;
 
-    b32 recording;
-    LD_MapRoute  route;
-    LD_MapRoute *selected;
+        b32         recording;
+        LD_MapRoute state;
+    } map;
+
+    u32 next_music_layer;
 };
 
 LD_MapRoute map_routes[] = {
+    // { LD_MAP_DESTINATION_TOWN,      10, { { -3.326922f, -1.619220f }, { -2.857968f, -1.362622f }, { -2.539433f, -0.867124f }, { -2.583674f, -0.566285f }, { -2.813727f, -0.380473f }, { -2.875664f, -0.123875f }, { -2.645611f, 0.106178f }, { -2.672156f, 0.442410f }, { -2.530585f, 0.645919f }, { -2.627915f, 0.911364f } } },
     { LD_MAP_DESTINATION_TOWN,      4, { { -2.849120f, -1.353774f }, { -2.512888f, -0.867124f }, { -2.902209f, -0.141571f }, { -2.645611f, 0.433562f } } },
     { LD_MAP_DESTINATION_CASTLE,    5, { { -2.831423f, -1.362622f }, { -2.539433f, -0.822882f }, { -2.831423f, -0.398169f }, { -3.680850f, -0.238901f }, { -3.902055f, 0.442410f } } },
     { LD_MAP_DESTINATION_MOUNTAIN,  5, { { -2.857968f, -1.353774f }, { -2.574826f, -0.548588f }, { -2.663307f, 0.407017f }, { -1.911211f, 0.504347f }, { -1.247596f, 0.079634f }, } },
@@ -239,7 +286,5 @@ LD_MapRoute map_routes[] = {
     { LD_MAP_DESTINATION_VOLCANO,   7, { { -2.787182f, -1.353774f }, { -1.796184f, -0.548588f }, { -0.760945f, -0.893668f }, { 0.946757f, -0.575133f }, { 1.937755f, -0.176964f }, { 2.521736f, -1.229900f }, { 3.105717f, -1.035239f }, } },
     { LD_MAP_DESTINATION_TEMPLE,    8, { { -2.548281f, -0.831731f }, { -0.822882f, -0.840579f }, { 0.495499f, -1.238747f }, { 0.955606f, -0.575133f }, { 1.911211f, -0.203509f }, { 2.468647f, -0.088482f }, { 3.477342f, 0.362776f }, { 4.123260f, 1.167962f }, }, }
 };
-
-function void LD_MusicInit(LD_ModePlay *play);
 
 #endif  // LD_MODE_PLAY_H_

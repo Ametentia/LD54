@@ -1,9 +1,9 @@
 #include "ld_mode_play.h"
 
 function LD_PlacedItem *LD_PlacedItemGet(LD_ModePlay *play) {
-    LD_PlacedItem *result = play->free_items;
+    LD_PlacedItem *result = play->items.free;
     if (!result) { result = xi_arena_push_array(play->arena, LD_PlacedItem, 1); }
-    else { play->free_items = result->next; }
+    else { play->items.free = result->next; }
 
     result->placed    = false;
     result->occupancy = 0;
@@ -18,8 +18,8 @@ function LD_PlacedItem *LD_PlacedItemGet(LD_ModePlay *play) {
 }
 
 function void LD_PlacedItemRemove(LD_ModePlay *play, LD_PlacedItem *item) {
-    item->next = play->free_items;
-    play->free_items = item;
+    item->next = play->items.free;
+    play->items.free = item;
 }
 
 function LD_ShapeType LD_ShapeTypeToBaseType(LD_ShapeType type) {
@@ -124,10 +124,13 @@ function u32 LD_PlaceShape(LD_ModePlay *play, u32 occupancy, LD_ShapeType type, 
         item->x     = xi_rng_range_f32(&play->rng, bounds.min.x + 1, 0.5f * (bounds.max.x + bounds.min.x) - 1.125f);
         item->y     = xi_rng_range_f32(&play->rng, bounds.min.y + 1.70f, 0.37f * (bounds.max.y - bounds.min.y));
         item->shape = base;
-        item->next  = play->placed_items;
+        item->next  = 0;
 
         LD_ShapeRotationRangeSet(item);
 
+        // @incomplete: FIXXXXX this will only select the first item of a given base shape
+        // thus the net never gets chosen for example
+        //
         for (u32 it = 0; it < XI_ARRAY_SIZE(items); ++it) {
             if (items[it].base_shape == base) {
                 item->info = &items[it];
@@ -137,7 +140,14 @@ function u32 LD_PlaceShape(LD_ModePlay *play, u32 occupancy, LD_ShapeType type, 
 
         XI_ASSERT(item->info != 0);
 
-        play->placed_items = item;
+        // append to the tail of the list
+        //
+        if (play->items.first == 0) { play->items.first      = item; }
+        if (play->items.last  != 0) { play->items.last->next = item; }
+
+        play->items.last      = item;
+        play->items.total    += 1;
+        play->items.solution += 1;
 
         play->cindex += 1;
         play->cindex %= XI_ARRAY_SIZE(debug_colours);
@@ -165,7 +175,7 @@ function void LD_SolutionClear(LD_ModePlay *play) {
 
     for (u32 it = 0; it < 32; ++it) { play->grid[it] = xi_v4_create(1, 1, 1, 1); }
 
-    LD_PlacedItem *item = play->placed_items;
+    LD_PlacedItem *item = play->items.first;
     while (item != 0) {
         LD_PlacedItem *remove = item;
         item = remove->next;
@@ -173,8 +183,22 @@ function void LD_SolutionClear(LD_ModePlay *play) {
         LD_PlacedItemRemove(play, remove);
     }
 
-    play->placed_items = 0;
-    play->bag_items = 0;
+    play->items.total    = 0;
+    play->items.solution = 0;
+    play->items.first    = play->items.last = 0;
+    play->items.bag      = 0;
+    play->items.picked   = 0;
+
+    play->map.route = 0;
+
+    // reset all of the layered music
+    //
+    xiContext *xi = play->ld->xi;
+    for (u32 it = 2; it < play->next_music_layer; ++it) {
+        xi_music_layer_disable_by_index(&xi->audio_player, it, XI_MUSIC_LAYER_EFFECT_FADE, 0.5f);
+    }
+
+    play->next_music_layer = 2;
 }
 
 function void LD_SolutionGenerate(LD_ModePlay *play) {
@@ -211,18 +235,25 @@ function void LD_SolutionGenerate(LD_ModePlay *play) {
         LD_SHAPE_TYPE_ZR,
     };
 
-    u32 route_index = xi_rng_choice_u32(&play->rng, XI_ARRAY_SIZE(map_routes));
+    u32 route_index = play->map.last_route;
+    while (route_index == play->map.last_route) {
+        // make sure we get a variance on the route in use
+        //
+        route_index = xi_rng_choice_u32(&play->rng, XI_ARRAY_SIZE(map_routes));
+    }
+
+    play->map.last_route = route_index;
+
     LD_MapRoute *route = &map_routes[route_index];
 
-    u32 placed_count;
-    while (missing > 4 || (placed_count < route->node_count)) {
+    u32 placed_count = 0;
+    while (missing > 5 && (placed_count < route->node_count)) {
         LD_SolutionClear(play);
 
         occupancy = play->occupancy;
 
         u32 index = xi_rng_choice_u32(&play->rng, XI_ARRAY_SIZE(distribution));
-        LD_ShapeType shape = distribution[index];
-        // LD_SHAPE_TYPE_T + xi_rng_choice_u32(&play->rng, LD_SHAPE_TYPE_COUNT - LD_SHAPE_TYPE_T);
+        LD_ShapeType shape = LD_SHAPE_TYPE_T + xi_rng_choice_u32(&play->rng, LD_SHAPE_TYPE_COUNT - LD_SHAPE_TYPE_T);
 
         LD_ShapeType last_shape;
 
@@ -242,7 +273,10 @@ function void LD_SolutionGenerate(LD_ModePlay *play) {
                 y = xi_rng_choice_u32(&play->rng, GRID_HEIGHT);
 
                 placed = LD_PlaceShape(play, occupancy, shape, x, y);
-                if (placed != 0) { placed_count += 1; }
+                if (placed != 0) {
+                    placed_count += 1;
+                    if (placed_count >= route->node_count) { break; }
+                }
 
                 last_shape = shape;
                 while (shape == last_shape) {
@@ -265,16 +299,12 @@ function void LD_SolutionGenerate(LD_ModePlay *play) {
         missing = __popcnt(~occupancy) - 2;
     }
 
-    u32 item_count = 0;
-    LD_PlacedItem *item = play->placed_items;
-    while (item != 0) {
-        item_count += 1;
-        item = item->next;
-    }
+    play->map.route = route;
 
-    play->selected = route;
+    xi_log(&play->logger, "gen", "%d items were placed (%d in solution)", play->items.total, play->items.solution);
 
-    xi_log(&play->logger, "gen", "%d items were placed", item_count);
+    play->occupancy      |= ~occupancy;
+    play->step_occupancy |= ~occupancy; // add missing here
 
     xi_log(&play->logger, "generation", "missing spaces: %d : 0x%x", __popcnt(~occupancy) - 2, occupancy);
 }
@@ -387,12 +417,32 @@ function void LD_ModePlayInit(LD_Context *ld) {
 
         f32 aspect = (xi->window.width / (f32) xi->window.height);
 
-        play->map_hovered = true;
+        play->map.hovered = false;
 
         xi_camera_transform_get_from_axes(&play->camera, aspect,
                 xi_v3_create(1, 0, 0), xi_v3_create(0, 1, 0), xi_v3_create(0, 0, 1), xi_v3_create(0, 0, 5), 0);
 
         LD_SolutionClear(play);
+
+        // setup music layers
+        //
+        // "2_pipa", "6_piccolo",
+        const char *music_names[] = {
+            "0_bodhran", "1_tambourine", "4_pipa", // "3_tambourine",
+            "7_harp", "5_percuss",   "8_percuss",
+            "9_cello",  "10_strings", "11_pad", "12_pad", "13_percuss", "14_pad"
+        };
+
+        for (u32 it = 0; it < XI_ARRAY_SIZE(music_names); ++it) {
+            xiSoundHandle music = xi_sound_get_by_name(&xi->assets, music_names[it]);
+            XI_ASSERT(music.value != 0);
+
+            xi_music_layer_add(&xi->audio_player, music, it);
+        }
+
+        play->next_music_layer = 2;
+
+        xi_music_layer_enable_by_index(&xi->audio_player, 0, XI_MUSIC_LAYER_EFFECT_FADE, 1.0f);
 
         ld->mode = LD_GAME_MODE_PLAY;
         ld->play = play;
@@ -545,10 +595,10 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
     if (kb->keys['s'].pressed) { LD_SolutionStep(play);     }
     if (kb->keys['c'].pressed) { LD_SolutionClear(play);    }
     if (kb->keys['i'].pressed) { play->bagOpen = true;      }
-    if (kb->keys['m'].pressed) { play->map_open = !play->map_open; }
+    if (kb->keys['m'].pressed) { play->map.open = !play->map.open; }
 
-    if (play->map_open && kb->keys['q'].pressed) {
-        if (play->recording) {
+    if (play->map.open && kb->keys['q'].pressed) {
+        if (play->map.recording) {
             xiArena *temp = xi_temp_get();
 
             xi_buffer buffer;
@@ -556,7 +606,7 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
             buffer.limit = 1024;
             buffer.data  = xi_arena_push_array(temp, u8, buffer.limit);
 
-            LD_MapRoute *route = &play->route;
+            LD_MapRoute *route = &play->map.state;
 
             xi_str_format_buffer(&buffer, "{ LD_MAP_DESTINATION_, %d, { ", route->node_count);
 
@@ -569,11 +619,10 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
             xi_log(&play->logger, "route", "%.*s", xi_str_unpack(buffer.str));
         }
 
-        play->route.node_count = 0;
-        play->recording = !play->recording;
+        play->map.state.node_count = 0;
+        play->map.recording = !play->map.recording;
     }
 
-    play->map_timer += dt;
 
     if (kb->keys['='].pressed) {
         play->cindex += 1;
@@ -589,12 +638,33 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
 
     v3 world = xi_unproject_xy(&play->camera, mouse->position.clip);
 
-    if (play->map_open && play->recording && mouse->left.pressed) {
-        LD_MapRoute *route = &play->route;
+    if (play->map.open && play->map.recording && mouse->left.pressed) {
+        LD_MapRoute *route = &play->map.state;
 
         if (route->node_count < XI_ARRAY_SIZE(route->nodes)) {
             route->nodes[route->node_count++] = world.xy;
         }
+    }
+
+    rect3 bounds = xi_camera_bounds_get(&play->camera);
+
+    v2 map_p = xi_v2_sub(bounds.max.xy, xi_v2_create(1, 1));
+
+    rect2 map_box;
+    map_box.min = xi_v2_sub(map_p, xi_v2_create(0.5f, 0.5f));
+    map_box.max = xi_v2_add(map_p, xi_v2_create(0.5f, 0.5f));
+
+    if (LD_PointInRect(map_box, world.xy)) {
+        play->map.hovered = true;
+        play->map.timer  += dt;
+
+        if (mouse->left.pressed) {
+            play->map.open = true;
+        }
+    }
+    else {
+        play->map.hovered = false;
+        play->map.timer   = 0;
     }
 
     v2s mouse_grid = LD_MouseToGrid(world.xy);
@@ -605,7 +675,7 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
         // loop through all of the placed items and check if the mouse is hovering over them,
         // if they are pick them up
         //
-        LD_PlacedItem *item = play->placed_items;
+        LD_PlacedItem *item = play->items.first;
         while (item != 0) {
             // @incomplete: if the item is in the bag it must be removed!
             //
@@ -614,7 +684,8 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
                 if (LD_PointInRect(hitbox, world.xy)) {
                     item->pick_x = item->x;
                     item->pick_y = item->y;
-                    play->picked = item;
+
+                    play->items.picked = item;
 
                     break;
                 }
@@ -624,11 +695,19 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
                 // if it is remove from the bag and
                 //
                 if (item->x == mouse_grid.x && item->y == mouse_grid.y) {
-                    play->picked     = item;
-                    play->occupancy &= ~item->occupancy;
+                    play->items.picked = item;
+                    play->occupancy   &= ~item->occupancy;
 
                     item->placed    = false;
                     item->occupancy = 0;
+
+                    if (play->next_music_layer > 2) {
+                        play->next_music_layer -= 1;
+                        xi_music_layer_disable_by_index(&xi->audio_player, play->next_music_layer, XI_MUSIC_LAYER_EFFECT_FADE, 0.8f);
+
+                        xi_log(&play->logger, "music", "disabling layer %d", play->next_music_layer);
+                    }
+
                     break;
                 }
                 else {
@@ -636,11 +715,18 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
                     for (u32 it = 0; it < shape->offset_count; ++it) {
                         v2s o = shape->offsets[it];
                         if (((item->x + o.x) == mouse_grid.x) && ((item->y + o.y) == mouse_grid.y)) {
-                            play->picked     = item;
-                            play->occupancy &= ~item->occupancy;
+                            play->items.picked = item;
+                            play->occupancy   &= ~item->occupancy;
 
                             item->placed    = false;
                             item->occupancy = 0;
+
+                            if (play->next_music_layer > 2) {
+                                play->next_music_layer -= 1;
+                                xi_music_layer_disable_by_index(&xi->audio_player, play->next_music_layer, XI_MUSIC_LAYER_EFFECT_FADE, 0.8f);
+
+                                xi_log(&play->logger, "music", "disabling layer %d", play->next_music_layer);
+                            }
 
                             break;
                         }
@@ -651,13 +737,13 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
             item = item->next;
         }
 
-        if (play->picked) {
-            play->picked->x = world.x;
-            play->picked->y = world.y;
+        if (play->items.picked) {
+            play->items.picked->x = world.x;
+            play->items.picked->y = world.y;
         }
     }
-    else if (play->picked) {
-        LD_PlacedItem *picked = play->picked;
+    else if (play->items.picked) {
+        LD_PlacedItem *picked = play->items.picked;
 
         if (mouse->left.released) {
             b32 valid_placement = false;
@@ -695,11 +781,18 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
                 play->occupancy  |= occupancy;
                 picked->occupancy = occupancy;
 
-                picked->next_bag = play->bag_items;
-                play->bag_items  = picked;
+                picked->next_bag = play->items.bag;
+                play->items.bag  = picked;
+
+                if (play->next_music_layer < MAX_MUSIC_LAYERS) {
+                    xi_music_layer_enable_by_index(&xi->audio_player, play->next_music_layer, XI_MUSIC_LAYER_EFFECT_FADE, 0.2f);
+
+                    xi_log(&play->logger, "music", "enabling layer %d", play->next_music_layer);
+                    play->next_music_layer += 1;
+                }
             }
 
-            play->picked = 0;
+            play->items.picked = 0;
         }
         else {
             picked->x = world.x;
@@ -712,43 +805,20 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
         }
     }
 
-    // if (xi->mouse.left.down && play->bagOpen) { LD_Pickup(world.xy, play); }
-    // if (xi->mouse.left.released){ play->itemSelected = false; }
-
-
     xi_animation_update(&play->hero, dt);
 
+    xiAudioPlayer *audio = &xi->audio_player;
+    for (u32 it = 0; it < audio->event_count; ++it) {
+        xiAudioEvent *event = &audio->events[it];
 
-#if 0
-            if (xi->mouse.left.pressed) {
-                LD_ShapeInfo *info = &shapes[play->type];
-                u32 shapeoc = LD_ShapeToOccupancy(mx, my, play->type);
-
-                b32 valid = (__popcnt(shapeoc) == (info->offset_count + 1)) && ((play->occupancy & shapeoc) == 0);
-                if (valid) {
-                    play->occupancy |= shapeoc;
-
-                    // @incomplete: this _creates_ a new placed item, we really want to have a list of
-                    // placable items generated at the beginning and the player drags them onto the grid,
-                    // this will keep them in the 'placed' item category but will also add them to the
-                    // bag
-                    //
-
-                    LD_PlacedItem *item = LD_PlacedItemGet(play);
-                    XI_ASSERT(item != 0);
-
-                    item->x     = (f32) mx;
-                    item->y     = (f32) my;
-                    item->shape = play->type;
-                    item->info  = &items[0]; // hardcode fishing rod
-                    item->next  = play->placed_items;
-
-                    play->placed_items = item;
+        switch (event->type) {
+            case XI_AUDIO_EVENT_TYPE_LOOP_RESET: {
+                if (event->from_music && event->tag == 0) {
+                    xi_music_layer_toggle_by_index(audio, 1, XI_MUSIC_LAYER_EFFECT_FADE, 0.5f);
                 }
             }
         }
     }
-#endif
 
     xi_logger_flush(&play->logger);
 }
@@ -787,7 +857,7 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
         v2 screen_centre = xi_v2_mul_f32(xi_v2_add(bounds.max.xy, bounds.min.xy), 0.5f);
         v2 screen_dim    = xi_v2_sub(bounds.max.xy, bounds.min.xy);
 
-        xi_quad_draw_xy(renderer, xi_v4_create(1, 0, 0, 1), screen_centre, xi_v2_create(0.25f, screen_dim.y), 0);
+        xi_quad_draw_xy(renderer, xi_v4_create(0.03f, 0.004f, 0.001f, 1), screen_centre, xi_v2_create(0.25f, screen_dim.y), 0);
 
         v2 p;
         p.x = screen_centre.x + (0.25f * screen_dim.x) + 0.05f;
@@ -829,8 +899,16 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
                 continue;
             }
 
-            v4 colour = play->grid[(y * GRID_WIDTH) + x];
-            colour.a *= 0.5f;
+
+            v4 colour = xi_v4_create(1, 1, 1, 0.5f); // play->grid[(y * GRID_WIDTH) + x];
+            // colour.a *= 0.5f;
+
+
+            u32 occupancy = LD_CoordToOccupancy(x, y);
+            if (occupancy & play->step_occupancy) {
+                colour.rgb = xi_v3_create(0.5f, 0.5f, 0.5f);
+                colour.a   = 0.8f;
+            }
 
             xi_coloured_sprite_draw_xy_scaled(renderer, slot, colour, xi_v2_create(xp, yp), GRID_TILE_DIM, 0);
 
@@ -847,8 +925,8 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
 
     v2s mouse_grid = LD_MouseToGrid(world.xy);
 
-    if (play->picked) {
-        LD_PlacedItem *picked = play->picked;
+    if (play->items.picked) {
+        LD_PlacedItem *picked = play->items.picked;
         u32 o = LD_ShapeToOccupancy(mouse_grid.x, mouse_grid.y, picked->shape);
         if (o != 0) {
             LD_ShapeInfo *shape  = &shapes[picked->shape];
@@ -877,7 +955,7 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
     {
         // draw placed items
         //
-        LD_PlacedItem *item = play->placed_items;
+        LD_PlacedItem *item = play->items.first;
         while (item != 0) {
             xiImageHandle img    = xi_image_get_by_name(&xi->assets, item->info->name);
             xiaImageInfo *info   = xi_image_info_get(&xi->assets, img);
@@ -894,7 +972,7 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
                p = xi_v2_create(item->x, item->y);
             }
 
-            if (item == play->picked) {
+            if (item == play->items.picked) {
                 p.x += GRID_TILE_DIM * visual.offset.x;
                 p.y += GRID_TILE_DIM * visual.offset.y;
             }
@@ -918,15 +996,17 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
         }
     }
 
-    const char *rooms[] = { "bedroom", "bathroom", "kitchen", "kitchen", "kitchen", "bedroom" };
+    const char *rooms[] = { "bedroom", "bathroom", "kitchen", "living_room", "foyer", "door" };
 
+    xiArena *temp = xi_temp_get();
     for (u32 it = 0; it < XI_ARRAY_SIZE(rooms); ++it) {
-        xiImageHandle img = xi_image_get_by_name(&xi->assets, rooms[it]);
+        string bgname    = xi_str_format(temp, "%s_bg", rooms[it]);
+        xiImageHandle bg = xi_image_get_by_name_str(&xi->assets, bgname);
 
         f32 scale = 1.89f; // @hack: why is this value good?
 
         v2 p = xi_v2_create(bounds.min.x + (0.5f * scale) + (it * scale), bounds.min.y + (0.25f * scale));
-        xi_sprite_draw_xy_scaled(renderer, img, p, scale, 0);
+        xi_sprite_draw_xy_scaled(renderer, bg, p, scale, 0);
     }
 
     {
@@ -934,14 +1014,24 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
         xi_sprite_draw_xy_scaled(renderer, hero, xi_v2_add(bounds.min.xy, xi_v2_create(0.8f, 0.4f)), 0.4f, 0);
     }
 
+    for (u32 it = 0; it < XI_ARRAY_SIZE(rooms); ++it) {
+        string fgname    = xi_str_format(temp, "%s_fg", rooms[it]);
+        xiImageHandle fg = xi_image_get_by_name_str(&xi->assets, fgname);
+
+        f32 scale = 1.89f; // @hack: why is this value good?
+
+        v2 p = xi_v2_create(bounds.min.x + (0.5f * scale) + (it * scale), bounds.min.y + (0.25f * scale));
+        xi_sprite_draw_xy_scaled(renderer, fg, p, scale, 0);
+    }
+
     {
         xiImageHandle map = xi_image_get_by_name(&xi->assets, "map");
 
         f32 scale = 1.0;
         f32 angle = 0;
-        if (play->map_hovered) {
-            angle  = 0.1f * xi_sin(play->map_timer);
-            scale += 0.05f * xi_sin(play->map_timer * 3.8f);
+        if (play->map.hovered) {
+            angle  = 0.1f * xi_sin(play->map.timer);
+            scale += 0.05f * xi_sin(play->map.timer * 3.8f);
         }
 
         xi_sprite_draw_xy_scaled(renderer, map, xi_v2_sub(bounds.max.xy, xi_v2_create(1.0, 1.0)), scale, angle);
@@ -954,7 +1044,7 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
     // screen
     //
 
-    if (play->map_open) {
+    if (play->map.open) {
         xiImageHandle img = xi_image_get_by_name(&xi->assets, "map_screen");
 
         v2 map_dim    = xi_v2_sub(bounds.max.xy, bounds.min.xy);
@@ -962,18 +1052,32 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
 
         xi_sprite_draw_xy_scaled(renderer, img, xi_v2_create(0, 0), map_scale, 0);
 
-        if (play->recording) {
-            LD_MapRoute *route = &play->route;
+        if (play->map.recording) {
+            LD_MapRoute *route = &play->map.state;
             for (u32 it = 0; it < route->node_count; ++it) {
                 xi_quad_draw_xy(renderer, xi_v4_create(0, 1, 0, 1), route->nodes[it],
                         xi_v2_create(0.1f, 0.1f), 0);
             }
         }
-        else if (play->selected != 0) {
-            LD_MapRoute *route = play->selected;
-            for (u32 it = 0; it < route->node_count; ++it) {
-                xi_quad_draw_xy(renderer, xi_v4_create(0, 1, 0, 1), route->nodes[it],
-                        xi_v2_create(0.1f, 0.1f), 0);
+        else if (play->map.route != 0) {
+            LD_MapRoute *route = play->map.route;
+            f32 index      = 0;
+            f32 index_step = (route->node_count / (f32) play->items.solution);
+
+            LD_PlacedItem *item = play->items.first;
+            while (item != 0) {
+                LD_MapBlockade *blockade = &blockades[item->info->type];
+                xiImageHandle image = xi_image_get_by_name(&xi->assets, blockade->name);
+
+                f32 scale = 0.3f;
+                if (image.value == 0) { scale = 0.1f; }
+
+                xi_sprite_draw_xy_scaled(renderer, image, route->nodes[(u32)(index + 0.5f)], scale, 0);
+
+                index += index_step;
+                if (index >= route->node_count) { break; }
+
+                item = item->next;
             }
         }
     }
