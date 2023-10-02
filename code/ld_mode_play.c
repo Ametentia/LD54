@@ -163,6 +163,8 @@ function void LD_SolutionClear(LD_ModePlay *play) {
     play->cindex    = 0;
     play->occupancy = 0;
 
+    play->puzzle_timer = 60;
+
     play->occupancy |= LD_CoordToOccupancy(0,              GRID_HEIGHT - 1);
     play->occupancy |= LD_CoordToOccupancy(GRID_WIDTH - 1, GRID_HEIGHT - 1);
 
@@ -412,12 +414,14 @@ function void LD_ModePlayInit(LD_Context *ld) {
         xi_logger_create(play->arena, &play->logger, xi->system.out, XI_KB(128));
 
         play->hero = xi_animation_get_by_name(&xi->assets, "hero");
+        play->heroFlame = xi_animation_get_by_name(&xi->assets, "hero_flame");
 
         play->grid = xi_arena_push_array(play->arena, v4, 32);
 
         f32 aspect = (xi->window.width / (f32) xi->window.height);
 
-        play->map.hovered = false;
+        play->map.hovered  = false;
+        play->puzzle_timer = 60.0f;
 
         xi_camera_transform_get_from_axes(&play->camera, aspect,
                 xi_v3_create(1, 0, 0), xi_v3_create(0, 1, 0), xi_v3_create(0, 0, 1), xi_v3_create(0, 0, 5), 0);
@@ -596,6 +600,8 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
     if (kb->keys['c'].pressed) { LD_SolutionClear(play);    }
     if (kb->keys['i'].pressed) { play->bagOpen = true;      }
     if (kb->keys['m'].pressed) { play->map.open = !play->map.open; }
+
+    play->puzzle_timer -= dt;
 
     if (play->map.open && kb->keys['q'].pressed) {
         if (play->map.recording) {
@@ -806,6 +812,7 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
     }
 
     xi_animation_update(&play->hero, dt);
+    xi_animation_update(&play->heroFlame, dt);
 
     xiAudioPlayer *audio = &xi->audio_player;
     for (u32 it = 0; it < audio->event_count; ++it) {
@@ -1009,10 +1016,15 @@ function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
         xi_sprite_draw_xy_scaled(renderer, bg, p, scale, 0);
     }
 
-    {
-        xiImageHandle hero = xi_animation_current_frame_get(&play->hero);
-        xi_sprite_draw_xy_scaled(renderer, hero, xi_v2_add(bounds.min.xy, xi_v2_create(0.8f, 0.4f)), 0.4f, 0);
+    f32 guy_pos = 10.5f;
+    if(play->puzzle_timer > 0){
+        guy_pos = (60 - play->puzzle_timer)*guy_pos/60;
     }
+    xiImageHandle hero = xi_animation_current_frame_get(&play->hero);
+    xi_sprite_draw_xy_scaled(renderer, hero, xi_v2_add(bounds.min.xy, xi_v2_create((guy_pos + 0.8f), 0.4f)), 0.4f, 0);
+
+    xiImageHandle heroFlame = xi_animation_current_frame_get(&play->heroFlame);
+    xi_sprite_draw_xy_scaled(renderer, heroFlame, xi_v2_add(bounds.min.xy, xi_v2_create(guy_pos + 0.55f, 0.3f)), 0.2f, 0);
 
     for (u32 it = 0; it < XI_ARRAY_SIZE(rooms); ++it) {
         string fgname    = xi_str_format(temp, "%s_fg", rooms[it]);

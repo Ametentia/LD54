@@ -233,6 +233,7 @@ struct LD_ModePlay {
     xiLogger logger;
 
     xiAnimation hero;
+    xiAnimation heroFlame;
 
     u32 occupancy;
 
@@ -274,6 +275,7 @@ struct LD_ModePlay {
     } map;
 
     u32 next_music_layer;
+    f32 puzzle_timer;
 };
 
 LD_MapRoute map_routes[] = {
