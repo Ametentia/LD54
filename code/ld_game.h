@@ -46,9 +46,12 @@ typedef xi_string string;
 
 typedef struct LD_ModePlay LD_ModePlay;
 
+typedef struct LD_ModeStart LD_ModeStart;
+
 typedef u32 LD_GameMode;
 enum LD_GameMode {
     LD_GAME_MODE_NONE = 0,
+    LD_GAME_MODE_START,
     LD_GAME_MODE_PLAY
 };
 
@@ -62,6 +65,7 @@ struct LD_Context {
     LD_GameMode mode;
     union {
         LD_ModePlay *play;
+        LD_ModeStart *start;
     };
 };
 

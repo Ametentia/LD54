@@ -447,8 +447,6 @@ function void LD_ModePlayInit(LD_Context *ld) {
         play->next_music_layer = 2;
 
         xi_music_layer_enable_by_index(&xi->audio_player, 0, XI_MUSIC_LAYER_EFFECT_FADE, 1.0f);
-
-        ld->mode = LD_GAME_MODE_PLAY;
         ld->play = play;
     }
 }
@@ -831,6 +829,7 @@ function void LD_ModePlayUpdate(LD_ModePlay *play, f32 dt) {
 }
 
 function void LD_ModePlayRender(LD_ModePlay *play, xiRenderer *renderer) {
+    
     LD_Context *ld = play->ld;
     xiContext  *xi = ld->xi;
 
